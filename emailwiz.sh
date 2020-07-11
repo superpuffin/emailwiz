@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # THE SETUP
 
@@ -8,9 +8,15 @@
 
 # The mailbox names are: Inbox, Sent, Drafts, Archive, Junk, Trash
 
+###
+###	TODO: edit this
+###
 # Use the typical unix login system for mail users. Users will log into their
 # email with their passnames on the server. No usage of a redundant mySQL
 # database to do this.
+###
+### END TODO
+###
 
 # DEPENDENCIES BEFORE RUNNING
 
@@ -34,7 +40,9 @@
 # `mail.` before it).
 
 echo "Installing programs..."
-apt install postfix dovecot-imapd dovecot-sieve opendkim spamassassin spamc
+### TODO: Spamassassin/Spamd? (Spamd supports DMARC), sticking with spamassasin for now
+apt install postfix dovecot-imapd dovecot-sieve dovecot-managesieved dovecot-lmtpd \
+	dovecot-mysql opendkim spamassassin spamc default-mysql-server
 # Check if OpenDKIM is installed and install it if not.
 which opendkim-genkey >/dev/null 2>&1 || apt install opendkim-tools
 domain="$(cat /etc/mailname)"
@@ -48,64 +56,22 @@ Use Let's Encrypt's Certbot to get that and then rerun this script.
 
 You may need to set up a dummy $maildomain site in nginx or Apache for that to work." && exit
 
-# NOTE ON POSTCONF COMMANDS
+# Set up MySQL databse and tables
+# Source the functions from mysql.sh
+source ./functions/mysql.sh
+# Create the database and accompanying user
+mk_db()
+# Populate the databse with tables
+create_tables()
+# Save the Database password to /root/ dir and unset variable
+save_pwd()
 
-# The `postconf` command literally just adds the line in question to
-# /etc/postfix/main.cf so if you need to debug something, go there. It replaces
-# any other line that sets the same setting, otherwise it is appended to the
-# end of the file.
-
-echo "Configuring Postfix's main.cf..."
-
-# Change the cert/key files to the default locations of the Let's Encrypt cert/key
-postconf -e "smtpd_tls_key_file=$certdir/privkey.pem"
-postconf -e "smtpd_tls_cert_file=$certdir/fullchain.pem"
-postconf -e "smtpd_use_tls = yes"
-postconf -e "smtpd_tls_auth_only = yes"
-postconf -e "smtp_tls_security_level = may"
-postconf -e "smtp_tls_loglevel = 1"
-postconf -e "smtp_tls_CAfile=$certdir/cert.pem"
-
-# Here we tell Postfix to look to Dovecot for authenticating users/passwords.
-# Dovecot will be putting an authentication socket in /var/spool/postfix/private/auth
-postconf -e "smtpd_sasl_auth_enable = yes"
-postconf -e "smtpd_sasl_type = dovecot"
-postconf -e "smtpd_sasl_path = private/auth"
-
-#postconf -e "smtpd_recipient_restrictions = permit_sasl_authenticated, permit_mynetworks, reject_unauth_destination"
-
-
-# NOTE: the trailing slash here, or for any directory name in the home_mailbox
-# command, is necessary as it distinguishes a maildir (which is the actual
-# directories that what we want) from a spoolfile (which is what old unix
-# boomers want and no one else).
-postconf -e "home_mailbox = Mail/Inbox/"
-
-# Research this one:
-#postconf -e "mailbox_command ="
-
-
-# master.cf
-
-echo "Configuring Postfix's master.cf..."
-
-sed -i "/^\s*-o/d;/^\s*submission/d;/^\s*smtp/d" /etc/postfix/master.cf
-
-echo "smtp unix - - n - - smtp
-smtp inet n - y - - smtpd
-  -o content_filter=spamassassin
-submission inet n       -       y       -       -       smtpd
-  -o syslog_name=postfix/submission
-  -o smtpd_tls_security_level=encrypt
-  -o smtpd_sasl_auth_enable=yes
-  -o smtpd_tls_auth_only=yes
-smtps     inet  n       -       y       -       -       smtpd
-  -o syslog_name=postfix/smtps
-  -o smtpd_tls_wrappermode=yes
-  -o smtpd_sasl_auth_enable=yes
-spamassassin unix -     n       n       -       -       pipe
-  user=debian-spamd argv=/usr/bin/spamc -f -e /usr/sbin/sendmail -oi -f \${sender} \${recipient}" >> /etc/postfix/master.cf
-
+# Configure Postfix
+source ./functions/postfix.sh
+# Configure main.cf
+postfix_main_cf()
+# Configure master.cf
+postfix_master.cf()
 
 # By default, dovecot has a bunch of configs in /etc/dovecot/conf.d/ These
 # files have nice documentation if you want to read it, but it's a huge pain to
@@ -220,8 +186,6 @@ account required        pam_unix.so" >> /etc/pam.d/dovecot
 # OpenDKIM is a way to authenticate your email so you can send to such services
 # without a problem.
 
-# TODO: add opendkim-tools ?
-
 # Create an OpenDKIM key in the proper place with proper permissions.
 echo "Generating OpenDKIM keys..."
 mkdir -p /etc/postfix/dkim
@@ -238,9 +202,7 @@ grep -q "$domain" /etc/postfix/dkim/signingtable 2>/dev/null ||
 echo "*@$domain $subdom._domainkey.$domain" >> /etc/postfix/dkim/signingtable
 
 grep -q "127.0.0.1" /etc/postfix/dkim/trustedhosts 2>/dev/null ||
-	echo "127.0.0.1
-10.1.0.0/16
-1.2.3.4/24" >> /etc/postfix/dkim/trustedhosts
+	echo "127.0.0.1" >> /etc/postfix/dkim/trustedhosts
 
 # ...and source it from opendkim.conf
 grep -q "^KeyTable" /etc/opendkim.conf 2>/dev/null || echo "KeyTable file:/etc/postfix/dkim/keytable
